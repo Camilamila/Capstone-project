@@ -1,0 +1,924 @@
+---
+title: "Analysis co-bidding networks"
+author: "Camila Salazar"
+date: "8/5/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data cleaning
+
+The datasets used for the analysis are availale here:
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+  setwd("/Users/camilasalazar/Documents/LSE/Capstone Project/data")
+library(dplyr)
+library(readr)
+library(tidyr)
+library(ggplot2)
+library(ggthemes)
+library(knitr)
+library(kableExtra)
+library(readxl)
+
+options(scipen=999)
+#Read datasets
+adj <- read_csv("final datasets/adj.csv", col_types = cols(X1 = col_skip()))
+load("bidders_dataset_full.Rdata")
+winners_full<-readRDS("winners_full2.Rdata")
+rate <- read_excel("final datasets/rate.xlsx")
+bidders_info <- read_csv("final datasets/bidders_info.csv")
+load("sub_market.Rdata")
+load("market_full.Rdata")
+market_final<-readRDS("market_final.Rdata")
+
+
+type<-adj%>%
+  select(id, tipo_procedimiento_codigo, tipo_procedimiento, institution2, nombre_licitacion, categoria, year, monto_total_adjudicado, moneda, fecha_publicacion)%>%
+  mutate(procedure=ifelse(tipo_procedimiento_codigo %in% c("CO", "LC", "LPI", "LPN"), "open", "closed"))%>%
+  select(-categoria)%>%
+  left_join(rate, by="year")%>%
+  mutate(amount_dolar=ifelse(moneda=="Guaraníes", monto_total_adjudicado/rate, monto_total_adjudicado))
+
+#Clean bidders dataset
+bidders_dataset <- bidders_dataset%>%
+  #Delete duplicates
+  distinct()%>%
+  #Create a column about the number of bidders per contract
+  group_by(con)%>%
+  mutate(total_bid=n())%>%
+  #Add columns about the type of procedure
+  left_join(type, by= c("con" = "id"))
+
+#Translate names of markets
+market_final<-market_final%>%
+  mutate(marketf=ifelse(marketf=="Alimentos Bebidas y Tabaco", "Food, beverages and tobacco",
+                 ifelse(marketf=="Computadoras","Computers",
+                  ifelse(marketf=="Equipo informatico y accesorios", "Computer equiment and accessories",
+                  ifelse(marketf=="Equipos Accesorios y Suministros Medicos", "Medical equipment",
+                  ifelse(marketf=="Equipos y Suministros de limpieza", "Cleaning equipment",
+                  ifelse(marketf=="Fontaneria, calefaccion y aire acondicionado", "Plumbing, heating and air conditioning",
+                  ifelse(marketf=="Instalacion, mantenimiento y reparacion de energia electrica y aparatos eléctricos", "Installation, maintenance and repair of electrical appliances",
+                  ifelse(marketf=="Instrumentos de medida, observacion y ensayo", "Lab equipment",
+                  ifelse(marketf=="Medicamentos y Productos Farmaceuticos", "Medical and pharmaceutical products",
+                  ifelse(marketf=="Muebles", "Furniture",
+                  ifelse(marketf=="Neumaticos y camaras de neumaticos", "Tires",
+                  ifelse(marketf=="Papel de imprenta y papel de escribir", "Paper",
+                  ifelse(marketf=="Pavimentación,construccion, arreglo o hermoseamiento de carreteras o caminos", "Pavement",
+                 ifelse(marketf=="Ropas, Maletas y Productos de Aseo Personal", "Clothes, luggage and personal care products",
+                  ifelse(marketf=="Seguro de vehiculos", "Vehicle insurance",
+                  ifelse(marketf=="Seguros de edificios o del contenido de edificios", "Building insurance",
+                  ifelse(marketf=="Servicios de guardias de seguridad", "Security guards services",
+                  ifelse(marketf=="Servicios de limpieza de edificios", "Cleaning services",
+                  ifelse(marketf=="Servicios de reparacion, mantenimiento de transportes", "Vehicle repair and maintenance",
+                  ifelse(marketf=="Suministros de oficina", "Office supplies",
+                  ifelse(marketf=="Suministros para impresora, fax y fotocopiadora","Supplies for printer, fax and photocopier",
+                   ifelse(marketf=="Viajes en aviones comerciales", "Airplane travel", 
+                   ifelse(marketf=="Restauracion y/o reparacion de edificios, mojones o monumentos", "Restauracion y reparacion de edificios, mojones o monumentos", 
+                  ifelse(marketf=="Turismos / Especiales", "Turismos Especiales", 
+                  ifelse(marketf=="Vehiculos Comerciales, Militares y Particulares - Accesorios y Componentes", "Vehiculos Comerciales, Militares y Particulares Accesorios y Componentes", marketf))))))))))))))))))))))))))
+```
+
+## Descriptive results for the full market
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+#Proportion of open tenders
+tenders<-bidders_dataset%>%
+  group_by(con)%>%
+  mutate(row=row_number())%>%
+  filter(row==1)%>%
+  select(con, total_bid)%>%
+  left_join(type, by=c("con"="id"))
+
+kable(round(prop.table(table(tenders$procedure))*100, 2))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+#Summary statistics and distribution of the number of bidders
+summary(tenders$total_bid[tenders$procedure=="open"])
+
+tenders%>%
+  filter(procedure=="open")%>%
+  ggplot(aes(x=total_bid))+
+  geom_histogram()+
+  theme_minimal()+
+  scale_x_continuous("Number of bids")+
+  scale_y_continuous("Number of firms")+
+  ggtitle("Plot 1. Number of bidders in open tenders")
+
+#Unique bidders in the dataset
+length(unique(bidders_dataset$ruc[bidders_dataset$procedure=="open"]))
+
+#Type of tenders firms participate in
+firms_type<-bidders_dataset%>%
+  group_by(ruc, procedure)%>%
+  summarise(total=n())%>%
+  ungroup()%>%
+  spread(procedure, total)%>%
+  mutate(procedure=ifelse(!is.na(closed)&is.na(open), "closed",
+                          ifelse(!is.na(closed)&!is.na(open), "both", "open")))
+kable(table(firms_type$procedure), col.names=c("Procedure", "Number of firms"))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+##Join bidders with winners
+winners_full1<-winners_full%>%
+  select(con, id_winner, fecha_emision, monto, ruc)
+
+bidders_full<-bidders_dataset%>%
+  left_join(winners_full1, by=c("con", "ruc"))%>%
+  mutate(win=ifelse(!is.na(id_winner), 1, 0),
+         type=ifelse(total_bid==1, "single bid", "other"))%>%
+  group_by(con)%>%
+  mutate(total_winners=sum(win))%>%
+  ungroup()%>%
+  mutate(monto2=monto/rate,
+         amount_final=ifelse(win==1 & total_winners==1, amount_dolar,
+                             ifelse(win==1 & total_winners>1 & !is.na(monto), monto2,
+                                    ifelse(win==1 & total_winners>1 & is.na(monto), amount_dolar/total_winners,NA))),
+         win_ruc=ifelse(win==1, ruc, NA))%>%
+  group_by(con)%>%
+  mutate(ruc_winners=paste0(na.omit(win_ruc), collapse = ", "),
+         ruc_bidders=paste0(na.omit(ruc), collapse = ", "))%>%
+  left_join(market_full, by="con")%>%
+  left_join(market_final, by="con")
+
+
+#General success
+success<-bidders_full%>%
+  filter(total_winners>0, total_bid>1, procedure=="open")%>%
+  group_by(ruc)%>%
+  mutate(amount=ifelse(win==1, amount_final, 0))%>%
+  summarise(bids=n(),
+            wins=sum(win),
+            amount=sum(amount))%>%
+  mutate(suc=round((wins/bids*100),1),
+         suc_cat=ifelse(suc==100, "100", ifelse(suc==0, "0", "other")))
+
+
+#How many bids
+summary(success$bids)
+success%>%
+  ggplot(aes(x=bids))+
+  geom_histogram()+
+  theme_minimal()+
+  scale_x_continuous("Number of bids")+
+  scale_y_continuous("Number of firms")+
+  ggtitle("Plot 2. Number of bids per firm distribution")
+
+
+success%>%
+  ggplot(aes(x=bids, y=(amount/1000000)))+
+  geom_point()+
+  theme_minimal()+
+  scale_x_continuous("Number of bids")+
+  scale_y_continuous("Amount of contracts won (millions of dollars)")+
+ggtitle("Number of bids vs amount won")
+
+
+#Success rate
+summary(success$suc)
+summary(success$suc[success$bids>1])
+
+kable(round(prop.table(table(success$suc_cat[success$bids>1]))*100, 2))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+success%>%
+  filter(bids>1)%>%
+  ggplot(aes(x=suc))+
+  geom_histogram()+
+  theme_minimal()+
+  scale_x_continuous("Success rate")+
+  scale_y_continuous("Number of firms")+
+  ggtitle("Plot 4. Success rate distribution (more than 1 bid)")
+
+kable(success%>%
+        filter(bids>1)%>%
+        group_by(suc_cat)%>%
+        summarise(mean_tender=round(mean(bids), 1),
+                  median_tender=median(bids)))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+
+#Persistence in the market
+bidders_year<-bidders_full%>%
+  filter(procedure=="open")%>%
+  group_by(ruc, year)%>%
+  summarise(total_bids=n())%>%
+  ungroup()%>%
+  group_by(ruc)%>%
+  mutate(years=n_distinct(year))%>%
+  summarise(total_years=max(years),
+            total_bids=sum(total_bids))
+
+kable(round(prop.table(table(bidders_year$total_years))*100, 1),
+      col.names = c("Year in the market","Proportion"))%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+
+single_bid<-bidders_full%>%
+  group_by(con)%>%
+  mutate(row=row_number())%>%
+  filter(row==1, procedure=="open")%>%
+  mutate(type=ifelse(total_bid==1, "single bid", "other"))
+```
+
+##Market segmentation
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+market_tenders2<-bidders_full%>%
+  filter(procedure=="open")%>%
+  filter(total_winners>0)%>%
+  group_by(marketf)%>%
+  #count number of unique tenders
+  summarise(tenders=n_distinct(con))%>%
+  #keep markets with more than 20 tenders
+  filter(tenders>50, !is.na(marketf))
+
+#Markets with more than 50 tenders
+markets_vec2<-unique(market_tenders2$marketf)
+
+
+#Success market
+success_market2<-bidders_full%>%
+  filter(procedure=="open", marketf %in% markets_vec2)%>%
+  #keep contracts with information about the winners
+  filter(total_winners>0)%>%
+  group_by(marketf, ruc)%>%
+  mutate(amount=ifelse(win==1, amount_final, 0))%>%
+  summarise(bids=n(),
+            wins=sum(win),
+            amount=sum(amount),
+            single_bids=sum(type=="single bid"))%>%
+  mutate(suc=round((wins/bids*100),1),
+         suc_cat=ifelse(suc==100, "100", ifelse(suc==0, "0", "other")),
+         color=ifelse(suc==0, "#ff4040", 
+                      ifelse(suc==100, "#DADD4E",
+                             "#5DBCD2")))%>%
+  group_by(marketf)%>%
+  mutate(market_value=sum(amount))%>%
+  ungroup()%>%
+  mutate(cms=round((amount/market_value*100), 1))%>%
+  group_by(marketf)%>%
+  arrange(desc(cms), .by_group=TRUE)%>%
+  mutate(rowsnum=row_number())
+
+success_market_single2<-bidders_full%>%
+  filter(procedure=="open", marketf %in% markets_vec2)%>%
+  #keep contracts with information about the winners and with more than 1 bid
+  filter(total_winners>0, total_bid>1)%>%
+  group_by(marketf, ruc)%>%
+  mutate(amount=ifelse(win==1, amount_final, 0))%>%
+  summarise(bids=n(),
+            wins=sum(win),
+            amount=sum(amount))%>%
+  mutate(suc=round((wins/bids*100),1),
+         suc_cat=ifelse(suc==100, "100", ifelse(suc==0, "0", "other")),
+         color=ifelse(suc==0, "#ff4040", 
+                      ifelse(suc==100, "#DADD4E",
+                             "#5DBCD2")))%>%
+  group_by(marketf)%>%
+  mutate(market_value=sum(amount))%>%
+  ungroup()%>%
+  mutate(cms=round((amount/market_value*100), 1))%>%
+  group_by(marketf)%>%
+  arrange(desc(cms), .by_group=TRUE)%>%
+  mutate(rowsnum=row_number())
+
+summary(success_market_single2$suc[success_market2$bids>1])
+
+markets2<-success_market_single2%>%
+  filter(bids>1)%>%
+  group_by(marketf)%>%
+  summarise(med_suc=median(suc),
+            avg_suc=round(mean(suc), 2),
+            perc_85=round(sum(suc>85)/n()*100,1),
+            perc_zero=round(sum(suc==0)/n()*100,1))
+
+#Plot
+success_market_single2%>%
+  ungroup()%>%
+  mutate(marketf=ifelse(marketf=="Alquiler de instalaciones comerciales, industriales o salones", "Commercial rentals", marketf))%>%
+  filter(bids>1, marketf %in% c("Commercial rentals", "Computers", "Cleaning services"))%>%
+  ggplot(aes(x=suc))+
+  geom_density()+
+  facet_wrap(~marketf, scales="free", labeller = labeller(marketf=label_wrap_gen(width = 30)))+
+  theme_minimal()+
+  xlab("Success rate")+
+  ylab("Density")+
+  ggtitle("Success rate distribution (more than 1 bid)")
+
+
+#Concentrated market structure
+cms2<-bidders_full%>%
+  filter(procedure=="open", marketf %in% markets_vec2)%>%
+  #keep contracts with information about the winners and with more than 1 bid
+  filter(total_winners>0)%>%
+  group_by(marketf, ruc)%>%
+  mutate(amount=ifelse(win==1, amount_final, 0))%>%
+  summarise(amount=sum(amount))%>%
+  group_by(marketf)%>%
+  mutate(market_value=sum(amount))%>%
+  ungroup()%>%
+  mutate(cms=round((amount/market_value*100), 1))%>%
+  group_by(marketf)%>%
+  arrange(desc(cms), .by_group=TRUE)%>%
+  mutate(rowsnum=row_number())
+
+
+#Market stats
+market_stats2<-bidders_full%>%
+  filter(procedure=="open", marketf %in% markets_vec2)%>%
+  filter(total_winners>0)%>%
+  group_by(marketf)%>%
+  mutate(amount=ifelse(win==1, amount_final, 0))%>%
+  summarise(tenders=n_distinct(con),
+            bidders=n_distinct(ruc),
+            amount=round((sum(amount)/1000000),1),
+            `bidders/tenders`=round(bidders/tenders, 1))%>%
+  left_join(
+    (bidders_full%>%
+       filter(procedure=="open", marketf %in% markets_vec2)%>%
+       filter(total_winners>0)%>%
+       group_by(marketf, con)%>%
+       mutate(bid=max(total_bid))%>%
+       group_by(marketf)%>%
+       summarise(average_bids=round(mean(bid),1),
+                 median_bids=median(bid))), by="marketf")%>%
+  left_join(
+    (cms2%>%
+       group_by(marketf)%>%
+       summarise(max_csm=max(cms))), by="marketf")%>%
+  left_join((single_bid%>%
+               group_by(marketf)%>%
+               summarise(total_tenders=n(),
+                         single_bid=sum(type=="single bid"),
+                         prop_single=round(single_bid/total_tenders*100,1))%>%
+               select(marketf, prop_single)), by="marketf")
+
+#Plot CMS
+market_stats2%>%
+  ggplot(aes(x=max_csm))+
+  geom_histogram()+
+  stat_bin(bins=30)+
+  theme_minimal()+
+  scale_x_continuous("Maximum CMS", breaks = seq(0,82,10))+
+  scale_y_continuous("Number of submarkets", breaks = seq(1, 40, 1))+
+  ggtitle("Distribution of max CMS (76 markets)")+
+  geom_label(aes(x =42, y = 4, label = "Markets with \n high concentration"), 
+             hjust = 0, 
+             vjust = 0.5, 
+             colour = "#555555", 
+             label.size = NA, 
+             family="Helvetica", 
+             size = 4)
+```
+
+##Network analysis
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+
+library(igraph)
+library(scales)
+#Networks
+edgelist1<-bidders_full%>%
+  filter(procedure=="open", total_bid>1, total_winners>0,
+         !is.na(ruc), !is.na(marketf), marketf %in% markets_vec2)%>%
+  group_by(con)%>%
+  mutate(total_bid=n())%>%
+  filter(total_bid>1)%>%
+  select(con, ruc, marketf, ruc_winners, ruc_bidders)%>%
+  group_by(con, marketf, ruc_winners, ruc_bidders)%>%
+  do(data.frame(t(combn(.$ruc, 2)), stringsAsFactors=FALSE))
+
+#Create nodes
+nodes1<-bidders_full%>%
+  filter(procedure=="open", total_bid>1, !is.na(ruc))%>%
+  group_by(con)%>%
+  mutate(total_bid=n())%>%
+  filter(total_bid>1)%>%
+  ungroup()%>%
+  distinct(ruc)
+
+nodes_final1<-success_market2%>%
+  filter(ruc %in% nodes1$ruc)
+
+#Create networks of markets
+net_list1<-list()
+j<-1
+set.seed(1)
+for (i in markets_vec2){
+  message(i)
+  #filter edgelist for each market  
+  m<-edgelist1%>%
+    filter(marketf==i)
+  #Filter nodes
+  n<-nodes_final1%>%
+    filter(marketf==i)
+  #Create matrix
+  mat<-as.matrix(m[, 5:6]) 
+  #Set market name
+  market_name <- i
+  
+  #Create network
+  net<-get.adjacency(graph_from_edgelist(mat, directed=FALSE))
+  g1<-graph.adjacency(net, mode="undirected", weighted=TRUE)
+  net_list1[[j]]<-g1%>%
+    set.vertex.attribute("win", value=n$wins[match(V(g1)$name,n$ruc)])%>%
+    set.vertex.attribute("success", value=n$suc[match(V(g1)$name,n$ruc)])%>%
+    set.vertex.attribute("bid", value=n$bids[match(V(g1)$name,n$ruc)])%>%
+    set.vertex.attribute("amount", value=n$amount[match(V(g1)$name,n$ruc)])%>%
+    set.vertex.attribute("cms", value=n$cms[match(V(g1)$name,n$ruc)])%>%
+    set.vertex.attribute("color2", value=n$color[match(V(g1)$name,n$ruc)])%>%
+    set.vertex.attribute("single", value=n$single_bids[match(V(g1)$name,n$ruc)])
+  
+  #Calculate Jaccard similarity
+  sim<-similarity(net_list1[[j]], vids = V(net_list1[[j]]), mode = c("all"), loops = FALSE, method = "jaccard")
+  #Add row and column names to similarity matrix
+  rownames(sim)<-rownames(as.matrix(net))
+  colnames(sim)<-rownames(as.matrix(net))
+  #Add similarity as edge attribute
+  E(net_list1[[j]])$jaccard <- sim[get.edgelist(net_list1[[j]])]
+  E(net_list1[[j]])$jaccard2<-ifelse(E(net_list1[[j]])$jaccard>0.5, 1, 0) 
+  E(net_list1[[j]])$w_jaccard<-E(net_list1[[j]])$jaccard*E(net_list1[[j]])$weight
+  j<-j+1
+  message(j)
+}
+
+
+#summary statistics
+network<-c()
+nodes<-c()
+density<-c()
+av_path_legth<-c()
+transitivity<-c()
+av_degree<-c()
+cor_jaccard_intensity<-c()
+
+j<-1
+set.seed(1)
+for (i in markets_vec2){
+  message(i)
+  message(j)
+  network[j]<-i
+  nodes[j]<-vcount(net_list1[[j]])
+  density[j]<-round(graph.density(net_list1[[j]])*100, 3)
+  av_path_legth[j]<-round(average.path.length(net_list1[[j]]), 3)
+  transitivity[j]<-round(transitivity(net_list1[[j]]),3)
+  av_degree[j]<-round(mean(degree(net_list1[[j]])),3)
+  cor_jaccard_intensity[j]<-round(cor(E(net_list1[[j]])$jaccard, E(net_list1[[j]])$weight),3)
+  j<-j+1
+}
+
+net_measures1<-data.frame(network, nodes, density, av_path_legth, transitivity,av_degree, cor_jaccard_intensity)%>%
+  left_join((market_stats2%>%
+               select(marketf, tenders)), by=c("network"="marketf"))
+
+##Dataframes of edgelists interactions
+library(stringi)
+edgelist21<-edgelist1%>%
+  mutate(from=ifelse(X1<X2, X1, X2),
+         to=ifelse(from==X1, X2, X1),
+         win_from=ifelse((stri_detect_fixed(ruc_winners, from)==TRUE),1,0),
+         win_to=ifelse((stri_detect_fixed(ruc_winners, to)==TRUE), 1, 0))%>%
+  group_by(marketf, from, to)%>%
+  summarise(win_from=sum(win_from),
+            win_to=sum(win_to),
+            bids_edges=n())%>%
+  left_join((success_market2%>%
+               select(marketf, ruc, bids)), by=c("marketf", c("from"="ruc")))%>%
+  left_join((success_market2%>%
+               select(marketf, ruc, bids)), by=c("marketf", c("to"="ruc")))%>%
+  mutate(perc_from=round(bids_edges/bids.x*100,1),
+         perc_to=round(bids_edges/bids.y*100,1),
+         winrate_from=round(win_from/bids_edges*100,1),
+         winrate_to=round(win_to/bids_edges*100,1))
+
+
+list_edges1<-list()
+j<-1
+for (i in markets_vec2){
+  list_edges1[[j]]<-get.data.frame(net_list1[[j]])%>%
+    mutate(marketf=i)
+  message(i)
+  j<-j+1
+}
+edges_info1<-do.call(rbind, list_edges1)
+
+net_measures1<-net_measures1%>%
+  left_join((edges_info1%>%
+  group_by(marketf)%>%
+  summarise(max_edges=max(weight))), by=c("network"="marketf"))
+
+
+edges_info1<-edgelist21%>%
+  left_join(edges_info1, by=c("marketf", c("from", "to")))%>%
+  left_join(edges_info1, by=c("marketf", c("from"="to"), c("to"="from")))%>%
+  mutate(weight=ifelse(!is.na(weight.x), weight.x, weight.y),
+         jaccard=ifelse(!is.na(jaccard.x), jaccard.x, jaccard.y),
+         weight_jaccard=weight*jaccard)%>%
+  select(-weight.x, -weight.y, -jaccard.x, -jaccard.y)
+
+#Table of network metrics
+kable(net_measures1)%>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "center")
+```
+
+## Community detection 
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+louv_list1<-list()
+j<-1
+for (i in markets_vec2){
+  message(i)
+  message(j)
+  louv <- cluster_louvain(net_list1[[j]], weights = E(net_list1[[j]])$jaccard)
+  louv_list1[[j]]<-data.frame(marketf=i, name=louv$names, membership=louv$membership)
+  j<-j+1
+}
+communities1<-do.call(rbind, louv_list1)
+
+
+##Assign community to each node
+com_full1<-edges_info1%>%
+  filter(marketf %in% markets_vec2)%>%
+  left_join(communities1, by=c("marketf", c("from"="name")))%>%
+  left_join(communities1, by=c("marketf", c("to"="name")))%>%
+  #Keep edges of the same community
+  filter(membership.x==membership.y, bids_edges>1)%>%
+  group_by(marketf, membership.x)%>%
+  mutate(bids_75=quantile(bids_edges,0.75))%>%
+  #keep only high interaction edges
+  filter(bids_edges>bids_75)%>%
+  mutate(median_jac=median(jaccard),
+         suspicious=ifelse(median_jac>=0.5, 1,0),
+         edges=n())%>%
+  filter(edges>1, suspicious==1)%>%
+  select(marketf, from, to, membership.x, jaccard, median_jac, bids_edges, bids_75)
+
+
+#Firms
+firms1<-com_full1%>%
+  select(from, to, membership.x)%>%
+  gather(key=type, value=node, -marketf, -membership.x)%>%
+  select(-type)%>%
+  distinct()%>%
+  group_by(marketf)%>%
+  mutate(n_commu=n_distinct(membership.x),
+         membership.x=max(membership.x))
+
+
+#Assing tenders
+tenders_com1<-bidders_full%>%
+  filter(procedure=="open", total_bid>1, total_winners>0,
+         !is.na(ruc), marketf %in% markets_vec2)%>%
+  left_join(firms1, by=c("marketf", c("ruc"="node")))%>%
+  mutate(com_count=ifelse(!is.na(membership.x), 1, 0),
+         win_susp=ifelse(win==1 & !is.na(membership.x), 1, 0))%>%
+  group_by(con)%>%
+  mutate(bids_susp=sum(com_count),
+         win_susp=max(win_susp),
+         community=max(membership.x, na.rm = TRUE), 
+         community=ifelse(community==-Inf, 0, community),
+         bidders_type=ifelse(total_bid==bids_susp,"exclusive", ifelse(bids_susp>1&total_bid>1, "two or more", ifelse(bids_susp==0, "none", "only one"))),
+         row=row_number())%>%
+  filter(row==1)%>%
+  select(-com_count, -membership.x, -row)%>%
+  mutate(community_grouped=ifelse(bidders_type=="none", 0, 1))
+
+tenders_com1$nombre_licitacion<-tolower(tenders_com1$nombre_licitacion)
+
+
+#Tenders full
+tenders_com1_full<-bidders_full%>%
+  filter(procedure=="open", total_bid>1, total_winners>0,
+         !is.na(ruc), marketf %in% markets_vec2)%>%
+  left_join(firms1, by=c("marketf", c("ruc"="node")))%>%
+  mutate(com_count=ifelse(!is.na(membership.x), 1, 0),
+         win_susp=ifelse(win==1 & !is.na(membership.x), 1, 0))%>%
+  group_by(con)%>%
+  mutate(bids_susp=sum(com_count),
+         win_susp=max(win_susp),
+         community=max(membership.x, na.rm = TRUE), 
+         community=ifelse(community==-Inf, 0, community),
+         bidders_type=ifelse(total_bid==bids_susp,"exclusive", ifelse(bids_susp>1&total_bid>1, "two or more", ifelse(bids_susp==0, "none", "only one"))))%>%
+  mutate(community_grouped=ifelse(bidders_type=="none", 0, 1))
+
+
+#Unique communities
+unique_com1<-com_full1%>%
+  select(from, to, membership.x)%>%
+  group_by(marketf)%>%
+  mutate(n_commu=n_distinct(membership.x),
+         membership.x=max(membership.x))%>%
+  ungroup()%>%
+  gather(key=type, value=node, -marketf, -membership.x, -n_commu)%>%
+  group_by(marketf, membership.x,node, n_commu)%>%
+  summarise(total=n())%>%
+  ungroup()%>%
+  group_by(marketf, membership.x)%>%
+  summarise(total_firms=n(), 
+            total_com=max(n_commu))%>%
+  left_join((tenders_com1%>%
+               filter(community>0)%>%
+               group_by(marketf, community)%>%
+               summarise(total_tenders=n(),
+                         exclusive_tenders=sum(bidders_type=="exclusive"),
+                         one_tender=sum(bidders_type=="only one"),
+                         two_tender=sum(bidders_type=="two or more"))), by=c("marketf", c("membership.x"="community")))%>%
+  mutate(tenders=exclusive_tenders+two_tender)%>%
+  filter(total_tenders>50)
+
+
+#Select markets and tenders
+tenders_select1<-tenders_com1%>%
+  filter(marketf %in% unique_com1$marketf)
+
+#Vector of suspicious markets
+f<-c(unique(unique_com1$marketf))
+
+```
+
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+#Market stats and communities
+market_stats2%>%
+  left_join((tenders_com1%>%
+               filter(procedure=="open", marketf %in% markets_vec2)%>%
+               filter(total_winners>0)%>%
+               group_by(marketf, year)%>%
+               summarise(total_tenders=n())%>%
+               group_by(marketf)%>%
+               summarise(mean_tenders=mean(total_tenders))), by="marketf")%>%
+  mutate(susp=ifelse(marketf %in% f, 1, 0))%>%
+  ggplot(aes(y=prop_single, x=mean_tenders, color=as.factor(susp)))+
+  geom_point(alpha=0.5)+
+  theme_minimal()+
+  ylab("Proportion of single bid tenders")+
+  xlab("Average bids per year")+
+  scale_color_manual(values = c("#5DBCD2", "#ff4040"), name = "", labels = c("Non suspicious", "Suspicious"))+
+  ggtitle("Single bid tenders vs bidding frequency")
+
+##Network measures and communities
+net_measures1<-net_measures1%>%
+  mutate(susp=ifelse(network %in% f, 1, 0))
+
+plot_net<-function(m, n){
+  print(net_measures1%>%
+    ggplot(aes(x=m, fill=as.factor(susp)))+
+    geom_density(alpha=.3)+theme_minimal()+
+    xlab(n)+ggtitle(n)+
+    scale_fill_manual(values = c("#5DBCD2", "#ff4040"), name = "", labels = c("Non suspicious", "Suspicious")))
+}
+
+plot_net(density, "Average Density")
+plot_net(transitivity, "Transitivity")
+plot_net(av_degree, "Average degree")
+plot_net(av_path_legth, "Average path length")
+plot_net(cor_jaccard_intensity, "Correlation of Jaccard similarity and bidding intensity")
+plot_net(net_measures1$max_edges, "Maximum interactions")
+```
+
+##Price screens
+
+```{r message=FALSE, warning=FALSE, error=FALSE}
+library(hhi)
+#Price screens
+measures1<-tenders_select1%>%
+  group_by(marketf, win_susp)%>%
+  summarise(total=n(),
+            av=mean(amount_dolar), 
+            med=median(amount_dolar),
+            stdev=sd(amount_dolar),
+            cv=stdev/av)
+
+#Statistical significance of price differences
+for (i in f){
+  message(i)
+  print(wilcox.test(tenders_select1$amount_dolar[tenders_select1$marketf==i] ~ tenders_select1$win_susp[tenders_select1$marketf==i]))
+}
+
+#Plot price differences
+tenders_select1%>%
+  mutate(groups=ifelse(bidders_type %in% c("exclusive"), 1, 0))%>%
+  ggplot(aes(x=log(amount_dolar), fill=as.factor(groups)))+
+  geom_density(alpha=.3)+ggtitle("Distribution of contract value awarded by group")+theme_minimal()+
+  facet_wrap(~marketf, ncol=2, scales="free", labeller = labeller(marketf=label_wrap_gen(width = 30)))+
+  theme(legend.position="top")+
+  xlab("Amount dollars (log scaled)")+
+  scale_fill_manual(values = c("#5DBCD2", "#ff4040"), name = "", labels = c("None or one", "More than 2"))
+
+##suspicious firms
+firms_susp<-firms1%>%
+  filter(marketf %in% tenders_select1$marketf)%>%
+  select(marketf, node)%>%
+  mutate(susp=1)
+
+#Percentage tenders won by group
+susp_winners<-tenders_select1%>%
+  group_by(marketf)%>%
+  summarise(total_tenders=n(),
+            winns=sum(win_susp))%>%
+  mutate(perc=round(winns/total_tenders*100,1))
+```
+
+
+#Market shares
+```{r message=FALSE, warning=FALSE, error=FALSE}
+
+#CMS for each market
+cms_single<-cms2%>%
+  select(marketf, ruc, cms)%>%
+  rename(cms_full=cms)
+
+markets_screens<-bidders_full%>%
+  filter(con %in% tenders_select1$con, !is.na(ruc))%>%
+  group_by(marketf)%>%
+  mutate(total_tenders=n_distinct(con))%>%
+  group_by(marketf, ruc)%>%
+  mutate(amount=ifelse(win==1, amount_final, 0))%>%
+  summarise(bids=n(),
+            wins=sum(win),
+            amount=sum(amount),
+            total_tenders=max(total_tenders))%>%
+  mutate(suc=round((wins/bids*100),1),
+         suc_cat=ifelse(suc==100, "100", ifelse(suc==0, "0", "other")),
+         market_value=sum(amount),
+         cms=round((amount/market_value*100), 1),
+         perc_tender=round(bids/total_tenders*100,1))%>%
+  left_join(cms_single, by=c("marketf", "ruc"))%>%
+  left_join(firms_susp, by=c("marketf", c("ruc"="node")))%>%
+  mutate(susp=ifelse(is.na(susp), 0, susp))%>%
+  left_join((bidders_info%>%
+               select(id, ruc, bussi_name, legal_rep, type_prov, phone, mail, address, city, department)), by="ruc")%>%
+  mutate(colorsusp=ifelse(susp==0, "#5DBCD2", "#ff4040"))
+
+
+#Market screen stats
+f<-c(unique(unique_com1$marketf))
+for (i in f){
+  message(i)
+  print(i)
+  print(sum(markets_screens$cms[markets_screens$marketf==i & markets_screens$susp==1]))
+  print(max(markets_screens$cms[markets_screens$marketf==i & markets_screens$susp==1]))
+  print((length(markets_screens$suc_cat[markets_screens$marketf==i & markets_screens$suc_cat=="0"])/
+           length(markets_screens$suc_cat[markets_screens$marketf==i])*100))
+}
+
+
+collusive_markets<-c("Airplane travel", "Building insurance", "Cleaning services",
+                     "Lab equipment", "Security guards services", "Tires",
+                     "Vehicle insurance", "Vehicle repair and maintenance")
+markets_screens%>%
+  filter(marketf %in% collusive_markets)%>%
+  ggplot(aes(x=suc, y=bids, size=cms, color=as.factor(susp)))+
+  geom_point(alpha=0.5)+
+  facet_wrap(~marketf, scales="fixed", labeller = labeller(marketf=label_wrap_gen(width = 30)), ncol=4)+
+  theme_minimal()+
+  xlab("Success rate")+
+  ylab("Number of bids")+
+  scale_color_manual(values = c("#5DBCD2", "#ff4040"), name = "", labels = c("Non suspicious", "Suspicious"))+
+  ggtitle("Success rate vs Number of bids")
+
+noncollu<-c("Food, beverages and tobacco", "Medical equipment")
+markets_screens%>%
+  filter(marketf %in% noncollu)%>%
+  ggplot(aes(x=suc, y=bids, size=cms, color=as.factor(susp)))+
+  geom_point(alpha=0.5)+
+  facet_wrap(~marketf, scales="fixed", labeller = labeller(marketf=label_wrap_gen(width = 30)))+
+  theme_minimal()+
+  xlab("Success rate")+
+  ylab("Number of bids")+
+  scale_color_manual(values = c("#5DBCD2", "#ff4040"), name = "", labels = c("Non suspicious", "Suspicious"))+
+  ggtitle("Success rate vs Number of bids")
+
+markets_screens<-as.data.frame(markets_screens)
+
+#HHI
+hhivec<-c()
+market<-c()
+j<-1
+for (i in f) {
+  message(i)
+  message(j)
+  market[j]<-i
+  hhivec[j]<- hhi(markets_screens[markets_screens$marketf==i,], "cms")
+j<-j+1
+}
+hhi_df<-data.frame(marketf=market, hhi=hhivec)
+
+
+
+markets_screens_year<-bidders_full%>%
+  filter(con %in% tenders_select1$con, !is.na(ruc))%>%
+  group_by(marketf, year)%>%
+  mutate(total_tenders=n_distinct(con))%>%
+  group_by(marketf, ruc, year)%>%
+  mutate(amount=ifelse(win==1, amount_final, 0))%>%
+  summarise(bids=n(),
+            wins=sum(win),
+            amount=sum(amount),
+            total_tenders=max(total_tenders))%>%
+  group_by(marketf, year)%>%
+  mutate(suc=round((wins/bids*100),1),
+         suc_cat=ifelse(suc==100, "100", ifelse(suc==0, "0", "other")),
+         market_value=sum(amount),
+         cms=round((amount/market_value*100), 1),
+         perc_tender=round(bids/total_tenders*100,1))%>%
+  left_join(firms_susp, by=c("marketf", c("ruc"="node")))%>%
+  mutate(susp=ifelse(is.na(susp), 0, susp))
+
+markets_screens_year<-as.data.frame(markets_screens_year)
+
+#HHI function years
+hhi_years<-function(y){
+hhivec<-c()
+market<-c()
+j<-1
+for (i in f) {
+  message(i)
+  market[j]<-i
+  m<-markets_screens_year%>%
+    filter(marketf==i, year==y)
+  hhivec[j]<-hhi(m, "cms")
+  j<-j+1
+}
+return(data.frame(marketf=market, year=rep(y, 23), hhi=hhivec))
+}
+
+hhi_yearsdf<-rbind(hhi_years(2014), hhi_years(2015), hhi_years(2016), hhi_years(2017), hhi_years(2018))
+
+#See stability over time
+hhi_stable<-hhi_yearsdf%>%
+  group_by(marketf)%>%
+  summarise(sd_markets=sd(hhi))
+
+hhi_df<-hhi_df%>%
+  left_join((hhi_yearsdf%>%
+               group_by(marketf)%>%
+               summarise(sd_hhi=sd(hhi))), by="marketf")
+#plot
+hhi_df%>%
+  ggplot(aes(x=hhi, y=sd_hhi))+
+  geom_point(alpha=0.5, size=2)+
+  theme_minimal()+
+  xlab("HHI")+
+  ylab("Sd deviation")+
+  ggtitle("Standard deviation of HHI in suspicious markets (2014-2018)")
+
+#Success rate
+markets_screens%>%
+  filter(bids>1)%>%
+  ggplot(aes(x=suc, fill=as.factor(susp)))+
+  geom_histogram(alpha=.3)+theme_minimal()+
+  ggtitle("Success rate distribution")+
+  xlab("Success rate")+
+  scale_fill_manual(values = c("#5DBCD2", "#ff4040"), name = "", labels = c("Non suspicious", "Suspicious"))+facet_wrap(~marketf, scales="free", ncol=4, labeller = labeller(marketf=label_wrap_gen(width = 20)))
+
+for (i in f){
+  message(i)
+  print(i)
+  print(wilcox.test(markets_screens$suc[markets_screens$marketf==i & markets_screens$bids>1] ~ markets_screens$susp[markets_screens$marketf==i & markets_screens$bids>1]))
+}
+
+##Special markets
+library("ggsci")
+special_markets<-function (x){
+  m<-markets_screens$ruc[markets_screens$marketf==x & markets_screens$susp==1]
+  m2<-bidders_full%>%
+    filter(con %in% tenders_select1$con, !is.na(ruc), marketf==x)%>%
+    group_by(year)%>%
+    mutate(amount=ifelse(win==1, amount_final, 0),
+           total_value=sum(amount))%>%
+    filter(ruc %in% m)%>%
+    group_by(year, ruc)%>%
+    mutate(firm_value=sum(amount),
+           cms=firm_value/total_value*100)%>%
+    summarise(firm_value=max(firm_value),
+              cms=max(cms))
+  print(m2%>%
+          ggplot()+
+          geom_line(aes(x=year, y=cms, color=ruc))+
+          theme_minimal()+ggtitle(x)+
+          scale_color_jco())
+}
+
+special_markets("Airplane travel")
+special_markets("Security guards services")
+
+```
+
+
+```{r eval=FALSE}
+#Save networks to gephi format for plotting
+
+library(rgexf)
+j<-1
+for (i in markets_vec2){
+  gephi<-igraph.to.gexf(net_list1[[j]])
+  f1 <- file(paste0(i,".gexf"))
+  writeLines(gephi$graph, con = f1)
+  close(f1)
+  message(i)
+  j<-j+1
+}

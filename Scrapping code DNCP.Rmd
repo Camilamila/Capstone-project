@@ -1,0 +1,325 @@
+---
+title: "Scrapping code DNCP"
+author: "Camila Salazar"
+date: "8/5/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The datsets used for the project: *Who won the contract? An analysis of bidder networks and collusion in public procurement* were downloaded from the [DNCP website](https://www.contrataciones.gov.py/datos/api/v2/).  Heres is the code used for scrapping datasets about the tenders, tenderers, bidders, winners, products.  
+
+The first thing to do is to download the csv files of the awards between 2014 and 2018 in this [link](https://www.contrataciones.gov.py/datos/adjudicaciones).  Save all this files in the working directory.  
+
+In order to scrappe the information you need to [register an application](https://www.contrataciones.gov.py/datos/login) in the DNCP website to get an access token.   In the code, where it says "YOUR REQUEST TOKEN FROM THE APPLICATION", replace it with your own request token from the application. 
+
+
+```{r, eval=FALSE, message=FALSE, warning=FALSE, error=FALSE}
+  setwd("YOUR WORKING DIRECTORY")
+#Load packages
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(readr)
+library(tidyr)
+
+#Merges together the files of the awards
+fls<-list.files(pattern=".csv")
+file_list<-list()
+  for (i in fls){
+    file_list[[i]]<-data.frame(read.csv(i, stringsAsFactors = FALSE))
+    message(i)
+    file_list[[i]]$year<-i
+    file_list[[i]]$year<-sub('.csv', "", file_list[[i]]$year)
+  }
+adj<-do.call(rbind, file_list)
+#Filter dataset
+adj<-adj%>%
+  filter(X_estado%in%c("EJE", "EJEP"), year>=2014)%>%
+  separate(convocante, into=c("institution", "institution2", "branch"), sep="/", remove=FALSE)%>%
+  mutate(branch=ifelse((is.na(branch) & !is.na(institution) & !is.na(institution2)), institution2, branch),
+         institution2=ifelse(institution2==branch, institution, institution2),
+         institution=ifelse(institution2==institution,NA, institution))
+
+#Creates a list of ids of each tender
+ids<-c(adj$id)
+```
+
+### Bidders scrapping
+```{r, eval=FALSE}
+#Generate token
+df.list <- list()
+try(
+for (i in ids){
+  #Request token
+req_token <- POST(url ="https://www.contrataciones.gov.py:443/datos/api/v2/oauth/token",
+     config=add_headers(Authorization = (paste0("Basic ", "YOUR REQUEST TOKEN FROM THE APPLICATION"))))%>%
+  content("text")%>%
+  fromJSON(flatten=TRUE)
+
+#Get bidders
+prueba2<- GET(paste("https://www.contrataciones.gov.py:443/datos/api/v2/doc/adjudicaciones/",i,"/oferentes?show_pagination=false", sep=''), config=add_headers(Authorization = (paste0("Bearer ", req_token[2]))))
+
+if (prueba2$status_code==404){
+  next
+  }
+
+if (prueba2$status_code!=200){
+  req_token <- POST(url ="https://www.contrataciones.gov.py:443/datos/api/v2/oauth/token",
+     config=add_headers(Authorization = (paste0("Basic ", "YOUR REQUEST TOKEN FROM THE APPLICATION"))))%>%
+    content("text")%>%
+    fromJSON(flatten=TRUE)
+
+  prueba2<- GET(paste("https://www.contrataciones.gov.py:443/datos/api/v2/doc/adjudicaciones/",i,"/oferentes?show_pagination=false", sep=''), config=add_headers(Authorization = (paste0("Bearer ", req_token[2]))))%>%
+  content("text")%>%
+  fromJSON(flatten=TRUE)
+test<-unlist(prueba2$`@graph`$proveedor.list)
+x<-length(test)/3
+for (m in 1:x){
+  for (j in m+x){
+    for (k in j+x){
+      df.list[[length(df.list)+1]] <- data.frame(con=i,
+        id=test[m], razon=test[j], ruc=test[k])
+      message(i)
+      message(which(ids==i))
+      df <- do.call(rbind, df.list)
+    }}}}
+
+else {
+  prueba2<-prueba2%>%content("text")%>%
+  fromJSON(flatten=TRUE)
+test<-unlist(prueba2$`@graph`$proveedor.list)
+x<-length(test)/3
+for (m in 1:x){
+  for (j in m+x){
+    for (k in j+x){
+      df.list[[length(df.list)+1]] <- data.frame(con=i,
+        id=test[m], razon=test[j], ruc=test[k])
+      message(i)
+      message(which(ids==i))
+      df <- do.call(rbind, df.list)
+    }}}}
+}, silent = TRUE)
+
+#Save data
+write.csv(df, "bidders_full_dataset.csv")
+```
+
+### Winners scraping
+```{r, eval=FALSE}
+##Scrape winners
+#Generate token
+df.list <- list()
+try(
+for (i in ids){
+  #Request token
+req_token <- POST(url ="https://www.contrataciones.gov.py:443/datos/api/v2/oauth/token",
+     config=add_headers(Authorization = (paste0("Basic ", "YOUR REQUEST TOKEN FROM THE APPLICATION"))))%>%
+  content("text")%>%
+  fromJSON(flatten=TRUE)
+
+#Get winners
+winner <- GET(paste("https://www.contrataciones.gov.py:443/datos/api/v2/doc/adjudicaciones/",i,"/proveedores?show_pagination=false", sep=''),config=add_headers(Authorization = (paste0("Bearer ", req_token[2]))))
+
+if (winner$status_code==404){
+  next
+  }
+
+if (winner$status_code!=200){
+  req_token <- POST(url ="https://www.contrataciones.gov.py:443/datos/api/v2/oauth/token",
+     config=add_headers(Authorization = (paste0("Basic ", "YOUR REQUEST TOKEN FROM THE APPLICATION"))))%>%
+    content("text")%>%
+    fromJSON(flatten=TRUE)
+
+  winner<- GET(paste("https://www.contrataciones.gov.py:443/datos/api/v2/doc/adjudicaciones/",i,"/proveedores?show_pagination=false", sep=''),config=add_headers(Authorization = (paste0("Bearer ", req_token[2]))))%>%
+  content("text")%>%
+  fromJSON(flatten=TRUE)
+  
+test<-unlist(winner$`@graph`$contrato.list)
+x<-length(test)/10
+for (m in 1:x){
+  for (j in m+x){
+    for (k in j+x){
+      for(l in k+x){
+        for(n in l+x){
+          for(o in n+x*4){
+            for(p in o+x){
+      df.list[[length(df.list)+1]] <- data.frame(con=i,
+        id_winner=test[m], codigo_contr=test[j], fecha_emision=test[k],
+        monto=test[l], moneda=test[n], razon=test[o], ruc=test[p])
+      message(i)
+      message(which(ids==i))
+      df <- do.call(rbind, df.list)
+    }}}}}}}}
+
+else {
+  winner<-winner%>%content("text")%>%
+  fromJSON(flatten=TRUE)
+test<-unlist(winner$`@graph`$contrato.list)
+x<-length(test)/10
+for (m in 1:x){
+  for (j in m+x){
+    for (k in j+x){
+      for(l in k+x){
+        for(n in l+x){
+          for(o in n+x*4){
+            for(p in o+x){
+      df.list[[length(df.list)+1]] <- data.frame(con=i,
+        id_winner=test[m], codigo_contr=test[j], fecha_emision=test[k],
+        monto=test[l], moneda=test[n], razon=test[o], ruc=test[p])
+      message(i)
+      message(which(ids==i))
+      df <- do.call(rbind, df.list)
+    }}}}}}}
+}}, silent = TRUE)
+
+write.csv(df, "winners_full_dataset.csv")
+```
+
+### Bidders info scraping
+```{r, eval=FALSE}
+#Open dataset
+bidders_dataset <- read_csv("final datasets/bidders_dataset.csv", col_types = cols(X1 = col_skip()))
+
+#unique bidders
+unique_bidders<-bidders_dataset%>%
+  group_by(id)%>%
+  summarise(total=n())
+
+#unique ids
+ids_bid<-c(unique_bidders$id)
+
+#Scrappe bidder info
+#Generate token
+df.list <- list()
+try(
+for (i in ids_bid){
+  #Request token
+req_token <- POST(url ="https://www.contrataciones.gov.py:443/datos/api/v2/oauth/token",
+     config=add_headers(Authorization = (paste0("Basic ", "YOUR REQUEST TOKEN FROM THE APPLICATION"))))%>%
+  content("text")%>%
+  fromJSON(flatten=TRUE)
+
+#Get bidders
+bidder<- GET(paste("https://www.contrataciones.gov.py:443/datos/api/v2/doc/proveedores/",i, sep=''), config=add_headers(Authorization = (paste0("Bearer ", req_token[2]))))
+
+if (bidder$status_code==404){
+  next
+  }
+
+if (bidder$status_code!=200){
+  req_token <- POST(url ="https://www.contrataciones.gov.py:443/datos/api/v2/oauth/token",
+     config=add_headers(Authorization = (paste0("Basic ", "YOUR REQUEST TOKEN FROM THE APPLICATION"))))%>%
+    content("text")%>%
+    fromJSON(flatten=TRUE)
+
+  bidder<- GET(paste("https://www.contrataciones.gov.py:443/datos/api/v2/doc/proveedores/",i, sep=''), config=add_headers(Authorization = (paste0("Bearer ", req_token[2]))))%>%
+  content("text")%>%
+  fromJSON(flatten=TRUE)
+test<-unlist(bidder$`@graph`)
+      df.list[[length(df.list)+1]] <- data.frame(id_bid=i,
+        id=test[1], ruc=test[2], bussi_name=test[3], fantasy_name=test[4],
+        legal_rep=test[5], type_prov=test[7], buss_size=test[9],
+        type_activity=test[11], activity_des=test[12], phone=test[13], mail=test[14],
+        web=test[15], address=test[16], city=test[17], department=test[19],
+        country=test[21], lat=test[22], long=test[23])
+      message(i)
+      message(which(ids_bid==i))
+      df <- do.call(rbind, df.list)
+    }
+
+else {
+  bidder<-bidder%>%content("text")%>%
+  fromJSON(flatten=TRUE)
+test<-unlist(bidder$`@graph`)
+      df.list[[length(df.list)+1]] <- data.frame(id_bid=i,
+        id=test[1], ruc=test[2], bussi_name=test[3], fantasy_name=test[4],
+        legal_rep=test[5], type_prov=test[7], buss_size=test[9],
+        type_activity=test[11], activity_des=test[12], phone=test[13], mail=test[14],
+        web=test[15], address=test[16], city=test[17], department=test[19],
+        country=test[21], lat=test[22], long=test[23])
+      message(i)
+      message(which(ids_bid==i))
+      df <- do.call(rbind, df.list)
+    }
+}, silent = TRUE)
+
+
+bidunique<-bidders_info%>%
+  group_by(legal_rep)%>%
+  summarise(total=n())
+```
+
+###Product scrapping
+
+```{r, eval=FALSE}
+
+df.list <- list()
+try(
+  for (i in ids){
+    #Request token
+    req_token <- POST(url ="https://www.contrataciones.gov.py:443/datos/api/v2/oauth/token",
+                      config=add_headers(Authorization = (paste0("Basic ", "YOUR REQUEST TOKEN FROM THE APPLICATION"))))%>%
+      content("text")%>%
+      fromJSON(flatten=TRUE)
+    
+    #Get submarkets
+    prueba2<-GET(paste("https://www.contrataciones.gov.py:443/datos/api/v2/doc/ocds/tender/",i, sep=''), config=add_headers(Authorization = (paste0("Bearer ", req_token[2]))))
+    
+    if (prueba2$status_code==404){
+      next
+    }
+    
+    if (prueba2$status_code!=200){
+      req_token <- POST(url ="https://www.contrataciones.gov.py:443/datos/api/v2/oauth/token",
+                        config=add_headers(Authorization = (paste0("Basic ", "YOUR REQUEST TOKEN FROM THE APPLICATION"))))%>%
+        content("text")%>%
+        fromJSON(flatten=TRUE)
+      
+      prueba2<-GET(paste("https://www.contrataciones.gov.py:443/datos/api/v2/doc/ocds/tender/",i, sep=''), config=add_headers(Authorization = (paste0("Bearer ", req_token[2]))))%>%
+        content("text")%>%
+        fromJSON(flatten=TRUE)
+      
+      test<-unlist(prueba2$releases$tender.items)
+      if (is.null(test)) {
+        next
+      } else {
+        x<-length(test)/10
+        if (x==1){
+          df.list[[length(df.list)+1]] <- data.frame(con=i,
+                                                     submarket=test["description"], id_submarket=test["classification.id"])
+        } else {
+          for (m in 1:x){
+            df.list[[length(df.list)+1]] <- data.frame(con=i,
+                                                       submarket=test[paste0("description", m)], id_submarket=test[paste0("classification.id", m)])}}
+        
+        message(i)
+        message(which(ids_bid==i))
+        df <- do.call(rbind, df.list)
+      }}
+    
+    else {
+      prueba2<-prueba2%>%content("text")%>%
+        fromJSON(flatten=TRUE)
+      test<-unlist(prueba2$releases$tender.items)
+      if (is.null(test)) {
+        next
+      } else {
+        x<-length(test)/10
+        if (x==1){
+          df.list[[length(df.list)+1]] <- data.frame(con=i,
+                                                     submarket=test["description"], id_submarket=test["classification.id"])
+        } else {
+          for (m in 1:x){
+            df.list[[length(df.list)+1]] <- data.frame(con=i,
+                                                       submarket=test[paste0("description", m)], id_submarket=test[paste0("classification.id", m)])}
+        }
+        message(i)
+        message(which(ids_bid==i))
+        df <- do.call(rbind, df.list)
+      }
+    }
+  }, silent =FALSE)
+```
