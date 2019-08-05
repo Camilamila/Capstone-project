@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Data cleaning
 
-The datasets used for the analysis are availale here:
+The datasets used for the analysis are availale [here](https://drive.google.com/open?id=1YUFKexyMvdhywnIZKCvTNbk6S7W4CQIu)
 
 ```{r message=FALSE, warning=FALSE, error=FALSE}
   setwd("/Users/camilasalazar/Documents/LSE/Capstone Project/data")
